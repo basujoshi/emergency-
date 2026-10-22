@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">BD Remote Support</string>
+    <string name="accessibility_description">Allows explicitly requested remote support gestures during a visible, consented session. Disable this service at any time in Android Accessibility settings.</string>
+</resources>
