@@ -4,58 +4,40 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BD DANGER ALERT</title>
+<title>BD DANGER Monitor</title>
 <style>
-*{box-sizing:border-box}
-body{
-  margin:0;min-height:100vh;display:grid;place-items:center;
-  background:#080d18;color:white;font-family:Arial,sans-serif;
-  padding:20px
-}
-.card{
-  width:min(100%,480px);padding:28px 20px;text-align:center;
-  background:#151f30;border:1px solid #334155;border-radius:20px
-}
-h1{font-size:30px}
-.light{
-  width:45px;height:45px;margin:25px auto;border-radius:50%;
-  background:#64748b
-}
-.danger{
-  background:#ef2222;
-  box-shadow:0 0 20px #f22,0 0 50px #f22;
-  animation:blink .6s infinite alternate
-}
-@keyframes blink{from{opacity:.2}to{opacity:1}}
-#state{font-size:25px}
-button{
-  border:0;border-radius:9px;padding:12px;margin:6px;
-  background:#2563eb;color:white;font-size:15px;cursor:pointer
-}
-.secondary{background:#475569}
-p{color:#cbd5e1;line-height:1.5}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:white;font:16px Arial;padding:18px}
+main{width:min(100%,500px);background:#172033;padding:24px;border-radius:18px;box-sizing:border-box}
+button{padding:12px;border:0;border-radius:8px;background:#2563eb;color:white;margin:5px;cursor:pointer}
+code,a{overflow-wrap:anywhere;color:#93c5fd}
+.status{background:#0b1220;padding:14px;border-radius:10px;line-height:1.8}
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>BD <span style="color:#ff4545">DANGER ALERT</span></h1>
-  <div id="light" class="light"></div>
-  <h2 id="state">CONNECTING...</h2>
-  <p id="message">Connecting to Firebase...</p>
-  <p id="last">Waiting for heartbeat</p>
-  <button id="sound">Enable Alarm Sound</button>
-  <button id="notify" class="secondary">Enable Notifications</button>
-  <button id="silence" class="secondary">Silence Alarm</button>
+<main>
+<h1>BD <span style="color:#60a5fa">MONITOR</span></h1>
+<p>Worldwide monitoring — no login form.</p>
+<div class="status">
+<b>Status:</b> <span id="status">Connecting...</span><br>
+<b>Room code:</b> <code id="room">Creating...</code><br>
+<b>Last heartbeat:</b> <span id="last">—</span>
 </div>
+<p><b>Alert link for your other device:</b></p>
+<a id="alertLink">Preparing link...</a><br>
+<button id="copy">Copy Alert Link</button>
+<button id="stop" style="background:#b91c1c">Stop Monitor</button>
+<button id="resume">Resume Monitor</button>
+<p id="msg"></p>
+</main>
 
 <script type="module">
 import {initializeApp}
 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 
-import {getAuth,signInWithEmailAndPassword}
+import {getAuth,signInAnonymously}
 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-import {getDatabase,ref,onValue}
+import {getDatabase,ref,set,serverTimestamp}
 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const firebaseConfig = {
@@ -72,195 +54,83 @@ const firebaseConfig = {
 const app=initializeApp(firebaseConfig);
 const auth=getAuth(app);
 const db=getDatabase(app);
-
 const $=id=>document.getElementById(id);
-const TIMEOUT=10000;
 
-let lastHeartbeat=0;
-let alarmEnabled=false;
-let silenced=false;
-let danger=null;
-let audio=null;
-let oscillator=null;
-let gain=null;
-let unsubscribe=null;
-
-function soundOff(){
-  if(oscillator){
-    try{oscillator.stop()}catch(e){}
-    oscillator.disconnect();
-    oscillator=null;
-  }
-  if(gain){
-    gain.disconnect();
-    gain=null;
-  }
+function makeRoom(){
+  const bytes=new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-function soundOn(){
-  if(!alarmEnabled||silenced||!danger||oscillator)return;
+const roomId=new URLSearchParams(location.search).get("room")||makeRoom();
+$("room").textContent=roomId;
 
+const link=new URL("alert.html",location.href);
+link.searchParams.set("room",roomId);
+$("alertLink").href=link.href;
+$("alertLink").textContent=link.href;
+
+let uid=null,seq=0,running=false,timer=null;
+
+async function beat(){
+  if(!uid||!running)return;
+  const now=Date.now();
   try{
-    audio=audio||new(window.AudioContext||
-      window.webkitAudioContext)();
-
-    audio.resume();
-    oscillator=audio.createOscillator();
-    gain=audio.createGain();
-
-    oscillator.type="square";
-    oscillator.frequency.value=880;
-    gain.gain.value=0.07;
-
-    oscillator.connect(gain);
-    gain.connect(audio.destination);
-    oscillator.start();
-
-    let pulse=true;
-    const timer=setInterval(()=>{
-      if(!oscillator){
-        clearInterval(timer);
-        return;
-      }
-      pulse=!pulse;
-      gain.gain.setTargetAtTime(
-        pulse?0.07:0.001,audio.currentTime,0.02
-      );
-    },350);
-
-  }catch(e){
-    $("message").textContent=
-      "Sound blocked. Tap Enable Alarm Sound.";
-  }
-}
-
-function showDanger(bad,reason){
-  if(danger===bad)return;
-
-  danger=bad;
-  $("light").className=bad?"light danger":"light";
-  $("state").textContent=bad?"🔴 DANGER!":"🟢 SYSTEM NORMAL";
-  $("state").style.color=bad?"#ff4545":"#4ade80";
-  $("message").textContent=reason;
-
-  if(bad){
-    silenced=false;
-    soundOn();
-
-    if("Notification" in window &&
-       Notification.permission==="granted"){
-      try{
-        new Notification("BD DANGER ALERT",{
-          body:reason,
-          tag:"bd-danger"
-        });
-      }catch(e){}
-    }
-  }else{
-    soundOff();
-    silenced=false;
-  }
-}
-
-function checkStatus(){
-  const age=Date.now()-lastHeartbeat;
-
-  if(!lastHeartbeat){
-    showDanger(true,
-      "No heartbeat received. Open monitor.html and sign in.");
-  }else if(age>TIMEOUT){
-    showDanger(true,
-      "Monitor is offline or its heartbeat has stopped!");
-  }else{
-    showDanger(false,
-      "Monitor is online. Heartbeat received.");
-  }
-
-  $("last").textContent=lastHeartbeat
-    ? "Last heartbeat: "+new Date(lastHeartbeat).toLocaleTimeString()
-    : "No heartbeat received yet";
-}
-
-async function start(){
-  const email=prompt("Enter Firebase account email");
-  if(!email)return;
-
-  const password=prompt("Enter Firebase account password");
-  if(!password)return;
-
-  try{
-    const credential=await signInWithEmailAndPassword(
-      auth,email,password
-    );
-
-    const uid=credential.user.uid;
-    const heartbeatRef=ref(
-      db,"monitors/"+uid+"/heartbeat"
-    );
-
-    unsubscribe=onValue(heartbeatRef,snapshot=>{
-      const data=snapshot.val();
-
-      if(data && Number.isFinite(Number(data.clientTime))){
-        const timestamp=Number(data.clientTime);
-
-        // Update only for a new heartbeat.
-        if(timestamp>lastHeartbeat){
-          lastHeartbeat=timestamp;
-        }
-      }
-
-      checkStatus();
-    },error=>{
-      showDanger(true,
-        "Firebase connection/read error. Check internet and rules.");
+    await set(ref(db,"rooms/"+roomId+"/heartbeat"),{
+      clientTime:now,
+      serverTime:serverTimestamp(),
+      sequence:++seq,
+      state:"online",
+      sender:uid
     });
-
-    setInterval(checkStatus,1000);
-
-  }catch(error){
-    $("state").textContent="LOGIN ERROR";
-    $("message").textContent=error.message;
+    $("status").textContent="ONLINE";
+    $("last").textContent=new Date(now).toLocaleTimeString();
+  }catch(e){
+    $("status").textContent="DATABASE ERROR";
+    $("msg").textContent=e.message;
   }
 }
 
-$("sound").addEventListener("click",async()=>{
+function start(){
+  if(!uid||running)return;
+  running=true;
+  beat();
+  timer=setInterval(beat,2000);
+  $("status").textContent="Starting monitor...";
+}
+
+function stop(){
+  running=false;
+  if(timer)clearInterval(timer);
+  timer=null;
+  $("status").textContent="STOPPED — alert will time out";
+}
+
+$("stop").onclick=stop;
+$("resume").onclick=start;
+
+$("copy").onclick=async()=>{
   try{
-    audio=audio||new(window.AudioContext||
-      window.webkitAudioContext)();
-    await audio.resume();
-    alarmEnabled=true;
-    silenced=false;
-    soundOn();
-    $("message").textContent=danger
-      ?"DANGER active — alarm enabled."
-      :"Alarm enabled. Monitoring active.";
+    await navigator.clipboard.writeText(link.href);
+    $("msg").textContent="Alert link copied. Send it privately.";
   }catch(e){
-    $("message").textContent="Could not enable sound.";
+    $("msg").textContent="Select and copy the alert link manually.";
   }
+};
+
+try{
+  const credential=await signInAnonymously(auth);
+  uid=credential.user.uid;
+  start();
+}catch(e){
+  $("status").textContent="CONNECTION FAILED";
+  $("msg").textContent=
+    "Enable Anonymous Authentication in Firebase. "+e.message;
+}
+
+window.addEventListener("pagehide",()=>{
+  if(timer)clearInterval(timer);
 });
-
-$("notify").addEventListener("click",async()=>{
-  if(!("Notification" in window)){
-    $("message").textContent=
-      "Notifications are not supported in this browser.";
-    return;
-  }
-
-  const result=await Notification.requestPermission();
-  $("message").textContent=result==="granted"
-    ?"Notifications enabled."
-    :"Notification permission not granted.";
-});
-
-$("silence").addEventListener("click",()=>{
-  silenced=true;
-  soundOff();
-  $("message").textContent=
-    "Alarm silenced. Visual alert remains active.";
-});
-
-start();
 </script>
 </body>
 </html>
