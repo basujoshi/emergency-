@@ -1,30 +1,216 @@
+
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BD Monitor</title></head>
-<body style="background:#101827;color:white;font-family:Arial;text-align:center;padding:30px">
-<h1>BD MONITOR</h1><p id="status">Starting...</p>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BD DANGER ALERT</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:#080d18;color:white;font:16px Arial}
+main{width:min(100%,500px);padding:25px 20px;background:#172033;border-radius:20px;text-align:center}
+.light{width:45px;height:45px;margin:25px auto;border-radius:50%;background:#64748b}
+.danger{background:#ef2222;box-shadow:0 0 20px #f22,0 0 55px #f22;animation:blink .6s infinite alternate}
+@keyframes blink{from{opacity:.2}to{opacity:1}}
+button{border:0;border-radius:9px;padding:12px;margin:5px;background:#2563eb;color:white;cursor:pointer}
+.secondary{background:#475569}
+.good{color:#86efac}.bad{color:#f87171}
+p{line-height:1.5;color:#cbd5e1;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<h1>BD <span style="color:#f87171">DANGER ALERT</span></h1>
+<div id="light" class="light"></div>
+<h2 id="state">CONNECTING...</h2>
+<p id="message">Connecting to Firebase...</p>
+<p id="last">Waiting for heartbeat...</p>
+<button id="sound">Enable Alarm Sound</button>
+<button id="notify" class="secondary">Enable Notifications</button>
+<button id="silence" class="secondary">Silence Alarm</button>
+<p id="msg"></p>
+</main>
+
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getDatabase, ref, set, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import {initializeApp}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+
+import {getAuth,signInAnonymously}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+import {getDatabase,ref,onValue}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
 const firebaseConfig = {
-apiKey:"AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
-authDomain:"king-59c08.firebaseapp.com",
-databaseURL:"https://king-59c08-default-rtdb.firebaseio.com",
-projectId:"king-59c08",
-storageBucket:"king-59c08.firebasestorage.app",
-messagingSenderId:"982382372976",
-appId:"1:982382372976:web:07758531a29fdd966e6cb5"
+  apiKey: "AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
+  authDomain: "king-59c08.firebaseapp.com",
+  databaseURL: "https://king-59c08-default-rtdb.firebaseio.com",
+  projectId: "king-59c08",
+  storageBucket: "king-59c08.firebasestorage.app",
+  messagingSenderId: "982382372976",
+  appId: "1:982382372976:web:07758531a29fdd966e6cb5",
+  measurementId: "G-RQ00W2EW9Q"
 };
-const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getDatabase(app);
-const email=prompt("Firebase account email"),password=prompt("Firebase account password");
-try {
-const user=await signInWithEmailAndPassword(auth,email,password);
-let n=0;
-async function beat(){
-try{await set(ref(db,"monitors/"+user.user.uid+"/heartbeat"),{clientTime:Date.now(),serverTime:serverTimestamp(),sequence:++n,state:"online"});document.getElementById("status").textContent="MONITOR ONLINE — "+new Date().toLocaleTimeString();}
-catch(e){document.getElementById("status").textContent="ERROR: "+e.message;}
+
+const app=initializeApp(firebaseConfig);
+const auth=getAuth(app);
+const db=getDatabase(app);
+const $=id=>document.getElementById(id);
+
+const roomId=new URLSearchParams(location.search).get("room");
+const TIMEOUT=10000;
+
+let lastBeat=0,danger=null;
+let soundEnabled=false,silenced=false;
+let audio=null,oscillator=null,gain=null;
+
+function stopSound(){
+  if(oscillator){
+    try{oscillator.stop()}catch(e){}
+    oscillator.disconnect();
+    oscillator=null;
+  }
+  if(gain){
+    gain.disconnect();
+    gain=null;
+  }
 }
-await beat();setInterval(beat,2000);
-}catch(e){document.getElementById("status").textContent="Login error: "+e.message;}
-</script></body></html>
+
+function startSound(){
+  if(!soundEnabled||silenced||!danger||oscillator)return;
+  try{
+    audio=audio||new(window.AudioContext||
+      window.webkitAudioContext)();
+    audio.resume();
+
+    oscillator=audio.createOscillator();
+    gain=audio.createGain();
+    oscillator.type="square";
+    oscillator.frequency.value=880;
+    gain.gain.value=.07;
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start();
+
+    let pulse=true;
+    const timer=setInterval(()=>{
+      if(!oscillator){clearInterval(timer);return;}
+      pulse=!pulse;
+      if(gain){
+        gain.gain.setTargetAtTime(
+          pulse ? .07 : .001,audio.currentTime,.02
+        );
+      }
+    },350);
+  }catch(e){
+    $("msg").textContent="Sound blocked. Tap Enable Alarm Sound.";
+  }
+}
+
+function showDanger(bad,text){
+  if(danger===bad)return;
+  danger=bad;
+  $("light").className=bad?"light danger":"light";
+  $("state").textContent=bad?"DANGER!":"SYSTEM NORMAL";
+  $("state").className=bad?"bad":"good";
+  $("message").textContent=text;
+
+  if(bad){
+    silenced=false;
+    startSound();
+    if("Notification" in window &&
+       Notification.permission==="granted"){
+      try{
+        new Notification("BD DANGER ALERT",{
+          body:text,tag:"bd-danger"
+        });
+      }catch(e){}
+    }
+  }else{
+    stopSound();
+    silenced=false;
+  }
+}
+
+function checkStatus(){
+  const age=Date.now()-lastBeat;
+  if(!lastBeat){
+    showDanger(true,
+      "No heartbeat. Check monitor.html and the alert link.");
+  }else if(age>TIMEOUT){
+    showDanger(true,
+      "DANGER! Monitor is offline or signal lost.");
+  }else{
+    showDanger(false,"Monitor is online.");
+  }
+  $("last").textContent=lastBeat
+    ?"Last heartbeat: "+new Date(lastBeat).toLocaleTimeString()
+    :"No heartbeat received yet";
+}
+
+async function main(){
+  if(!roomId){
+    showDanger(true,
+      "Missing room code. Open the alert link from monitor.html.");
+    return;
+  }
+
+  try{
+    await signInAnonymously(auth);
+
+    onValue(ref(db,"rooms/"+roomId+"/heartbeat"),snapshot=>{
+      const data=snapshot.val();
+      if(data&&Number.isFinite(Number(data.clientTime))){
+        const timestamp=Number(data.clientTime);
+        if(timestamp>lastBeat)lastBeat=timestamp;
+      }
+      checkStatus();
+    },error=>{
+      showDanger(true,
+        "Firebase read failed. Check rules and internet.");
+      $("msg").textContent=error.message;
+    });
+
+    setInterval(checkStatus,1000);
+  }catch(e){
+    showDanger(true,
+      "Firebase connection failed. Check Anonymous Auth and rules.");
+    $("msg").textContent=e.message;
+  }
+}
+
+$("sound").onclick=async()=>{
+  try{
+    audio=audio||new(window.AudioContext||
+      window.webkitAudioContext)();
+    await audio.resume();
+    soundEnabled=true;
+    silenced=false;
+    startSound();
+    $("msg").textContent="Alarm sound enabled.";
+  }catch(e){
+    $("msg").textContent="Unable to enable sound.";
+  }
+};
+
+$("notify").onclick=async()=>{
+  if(!("Notification" in window)){
+    $("msg").textContent="Notifications unsupported by this browser.";
+    return;
+  }
+  const result=await Notification.requestPermission();
+  $("msg").textContent=result==="granted"
+    ?"Notification permission granted."
+    :"Notification permission not granted.";
+};
+
+$("silence").onclick=()=>{
+  silenced=true;
+  stopSound();
+  $("msg").textContent="Sound silenced; red visual alert remains.";
+};
+
+main();
+</script>
+</body>
+</html>
