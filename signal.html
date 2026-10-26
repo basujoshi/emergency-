@@ -1,43 +1,37 @@
-
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BD DANGER Monitor</title>
+<title>BD Danger Monitor</title>
 <style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:white;font:16px Arial;padding:18px}
-main{width:min(100%,500px);background:#172033;padding:24px;border-radius:18px;box-sizing:border-box}
-button{padding:12px;border:0;border-radius:8px;background:#2563eb;color:white;margin:5px;cursor:pointer}
-code,a{overflow-wrap:anywhere;color:#93c5fd}
-.status{background:#0b1220;padding:14px;border-radius:10px;line-height:1.8}
+body{margin:0;background:#07111f;color:#fff;font-family:Arial,sans-serif;
+display:grid;place-items:center;min-height:100vh;padding:18px;box-sizing:border-box}
+.card{width:100%;max-width:460px;background:#142238;padding:24px;
+border-radius:20px;box-sizing:border-box}
+h1{color:#4db8ff}input,button{width:100%;padding:14px;margin:8px 0;
+border-radius:10px;box-sizing:border-box;font-size:16px}
+input{background:#07111f;color:white;border:1px solid #47617e}
+button{border:0;background:#00c781;color:#062316;font-weight:bold}
+#stop{background:#ff4255;color:white}
+#status{padding:14px;background:#07111f;border-radius:10px;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
-<main>
-<h1>BD <span style="color:#60a5fa">MONITOR</span></h1>
-<p>Worldwide monitoring — no login form.</p>
-<div class="status">
-<b>Status:</b> <span id="status">Connecting...</span><br>
-<b>Room code:</b> <code id="room">Creating...</code><br>
-<b>Last heartbeat:</b> <span id="last">—</span>
+<div class="card">
+<h1>BD DANGER MONITOR</h1>
+<p>Keep this page open while monitoring.</p>
+<input id="room" placeholder="Room ID (same on both pages)">
+<button id="start">START MONITOR</button>
+<button id="stop" disabled>STOP MONITOR</button>
+<div id="status">Status: Stopped</div>
 </div>
-<p><b>Alert link for your other device:</b></p>
-<a id="alertLink">Preparing link...</a><br>
-<button id="copy">Copy Alert Link</button>
-<button id="stop" style="background:#b91c1c">Stop Monitor</button>
-<button id="resume">Resume Monitor</button>
-<p id="msg"></p>
-</main>
 
 <script type="module">
-import {initializeApp}
-from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-
-import {getAuth,signInAnonymously}
-from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-
-import {getDatabase,ref,set,serverTimestamp}
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, set, onDisconnect }
 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const firebaseConfig = {
@@ -51,86 +45,79 @@ const firebaseConfig = {
   measurementId: "G-RQ00W2EW9Q"
 };
 
-const app=initializeApp(firebaseConfig);
-const auth=getAuth(app);
-const db=getDatabase(app);
-const $=id=>document.getElementById(id);
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const $ = id => document.getElementById(id);
 
-function makeRoom(){
-  const bytes=new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");
+let timer = null;
+let activeRoom = null;
+
+function validRoom(value) {
+  return /^[A-Za-z0-9_-]{3,60}$/.test(value);
 }
 
-const roomId=new URLSearchParams(location.search).get("room")||makeRoom();
-$("room").textContent=roomId;
+$("start").onclick = async () => {
+  const room = $("room").value.trim();
 
-const link=new URL("alert.html",location.href);
-link.searchParams.set("room",roomId);
-$("alertLink").href=link.href;
-$("alertLink").textContent=link.href;
-
-let uid=null,seq=0,running=false,timer=null;
-
-async function beat(){
-  if(!uid||!running)return;
-  const now=Date.now();
-  try{
-    await set(ref(db,"rooms/"+roomId+"/heartbeat"),{
-      clientTime:now,
-      serverTime:serverTimestamp(),
-      sequence:++seq,
-      state:"online",
-      sender:uid
-    });
-    $("status").textContent="ONLINE";
-    $("last").textContent=new Date(now).toLocaleTimeString();
-  }catch(e){
-    $("status").textContent="DATABASE ERROR";
-    $("msg").textContent=e.message;
+  if (!validRoom(room)) {
+    $("status").textContent =
+      "Enter a Room ID using 3–60 letters, numbers, _ or -.";
+    return;
   }
-}
 
-function start(){
-  if(!uid||running)return;
-  running=true;
-  beat();
-  timer=setInterval(beat,2000);
-  $("status").textContent="Starting monitor...";
-}
+  if (timer) clearInterval(timer);
+  activeRoom = room;
+  const heartbeatRef = ref(db, `bdDangerRooms/${room}/heartbeat`);
 
-function stop(){
-  running=false;
-  if(timer)clearInterval(timer);
-  timer=null;
-  $("status").textContent="STOPPED — alert will time out";
-}
+  try {
+    await set(ref(db, `bdDangerRooms/${room}/active`), true);
+    await set(heartbeatRef, Date.now());
 
-$("stop").onclick=stop;
-$("resume").onclick=start;
+    timer = setInterval(async () => {
+      try {
+        await set(heartbeatRef, Date.now());
+        $("status").textContent =
+          "MONITOR ONLINE • Last heartbeat: " +
+          new Date().toLocaleTimeString();
+      } catch (error) {
+        $("status").textContent = "Database error: " + error.message;
+      }
+    }, 2000);
 
-$("copy").onclick=async()=>{
-  try{
-    await navigator.clipboard.writeText(link.href);
-    $("msg").textContent="Alert link copied. Send it privately.";
-  }catch(e){
-    $("msg").textContent="Select and copy the alert link manually.";
+    $("status").textContent = "MONITOR ONLINE";
+    $("start").disabled = true;
+    $("stop").disabled = false;
+    $("room").disabled = true;
+  } catch (error) {
+    $("status").textContent =
+      "Cannot connect: " + error.message +
+      ". Check Firebase Database Rules.";
   }
 };
 
-try{
-  const credential=await signInAnonymously(auth);
-  uid=credential.user.uid;
-  start();
-}catch(e){
-  $("status").textContent="CONNECTION FAILED";
-  $("msg").textContent=
-    "Enable Anonymous Authentication in Firebase. "+e.message;
-}
+$("stop").onclick = async () => {
+  if (timer) clearInterval(timer);
+  timer = null;
 
-window.addEventListener("pagehide",()=>{
-  if(timer)clearInterval(timer);
+  try {
+    if (activeRoom) {
+      await set(ref(db, `bdDangerRooms/${activeRoom}/active`), false);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  activeRoom = null;
+  $("status").textContent = "MONITOR STOPPED";
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  $("room").disabled = false;
+};
+
+window.addEventListener("pagehide", () => {
+  if (timer) clearInterval(timer);
 });
 </script>
 </body>
 </html>
+```
