@@ -1,0 +1,266 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BD DANGER ALERT</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;min-height:100vh;display:grid;place-items:center;
+  background:#080d18;color:white;font-family:Arial,sans-serif;
+  padding:20px
+}
+.card{
+  width:min(100%,480px);padding:28px 20px;text-align:center;
+  background:#151f30;border:1px solid #334155;border-radius:20px
+}
+h1{font-size:30px}
+.light{
+  width:45px;height:45px;margin:25px auto;border-radius:50%;
+  background:#64748b
+}
+.danger{
+  background:#ef2222;
+  box-shadow:0 0 20px #f22,0 0 50px #f22;
+  animation:blink .6s infinite alternate
+}
+@keyframes blink{from{opacity:.2}to{opacity:1}}
+#state{font-size:25px}
+button{
+  border:0;border-radius:9px;padding:12px;margin:6px;
+  background:#2563eb;color:white;font-size:15px;cursor:pointer
+}
+.secondary{background:#475569}
+p{color:#cbd5e1;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>BD <span style="color:#ff4545">DANGER ALERT</span></h1>
+  <div id="light" class="light"></div>
+  <h2 id="state">CONNECTING...</h2>
+  <p id="message">Connecting to Firebase...</p>
+  <p id="last">Waiting for heartbeat</p>
+  <button id="sound">Enable Alarm Sound</button>
+  <button id="notify" class="secondary">Enable Notifications</button>
+  <button id="silence" class="secondary">Silence Alarm</button>
+</div>
+
+<script type="module">
+import {initializeApp}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+
+import {getAuth,signInWithEmailAndPassword}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+import {getDatabase,ref,onValue}
+from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
+  authDomain: "king-59c08.firebaseapp.com",
+  databaseURL: "https://king-59c08-default-rtdb.firebaseio.com",
+  projectId: "king-59c08",
+  storageBucket: "king-59c08.firebasestorage.app",
+  messagingSenderId: "982382372976",
+  appId: "1:982382372976:web:07758531a29fdd966e6cb5",
+  measurementId: "G-RQ00W2EW9Q"
+};
+
+const app=initializeApp(firebaseConfig);
+const auth=getAuth(app);
+const db=getDatabase(app);
+
+const $=id=>document.getElementById(id);
+const TIMEOUT=10000;
+
+let lastHeartbeat=0;
+let alarmEnabled=false;
+let silenced=false;
+let danger=null;
+let audio=null;
+let oscillator=null;
+let gain=null;
+let unsubscribe=null;
+
+function soundOff(){
+  if(oscillator){
+    try{oscillator.stop()}catch(e){}
+    oscillator.disconnect();
+    oscillator=null;
+  }
+  if(gain){
+    gain.disconnect();
+    gain=null;
+  }
+}
+
+function soundOn(){
+  if(!alarmEnabled||silenced||!danger||oscillator)return;
+
+  try{
+    audio=audio||new(window.AudioContext||
+      window.webkitAudioContext)();
+
+    audio.resume();
+    oscillator=audio.createOscillator();
+    gain=audio.createGain();
+
+    oscillator.type="square";
+    oscillator.frequency.value=880;
+    gain.gain.value=0.07;
+
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start();
+
+    let pulse=true;
+    const timer=setInterval(()=>{
+      if(!oscillator){
+        clearInterval(timer);
+        return;
+      }
+      pulse=!pulse;
+      gain.gain.setTargetAtTime(
+        pulse?0.07:0.001,audio.currentTime,0.02
+      );
+    },350);
+
+  }catch(e){
+    $("message").textContent=
+      "Sound blocked. Tap Enable Alarm Sound.";
+  }
+}
+
+function showDanger(bad,reason){
+  if(danger===bad)return;
+
+  danger=bad;
+  $("light").className=bad?"light danger":"light";
+  $("state").textContent=bad?"🔴 DANGER!":"🟢 SYSTEM NORMAL";
+  $("state").style.color=bad?"#ff4545":"#4ade80";
+  $("message").textContent=reason;
+
+  if(bad){
+    silenced=false;
+    soundOn();
+
+    if("Notification" in window &&
+       Notification.permission==="granted"){
+      try{
+        new Notification("BD DANGER ALERT",{
+          body:reason,
+          tag:"bd-danger"
+        });
+      }catch(e){}
+    }
+  }else{
+    soundOff();
+    silenced=false;
+  }
+}
+
+function checkStatus(){
+  const age=Date.now()-lastHeartbeat;
+
+  if(!lastHeartbeat){
+    showDanger(true,
+      "No heartbeat received. Open monitor.html and sign in.");
+  }else if(age>TIMEOUT){
+    showDanger(true,
+      "Monitor is offline or its heartbeat has stopped!");
+  }else{
+    showDanger(false,
+      "Monitor is online. Heartbeat received.");
+  }
+
+  $("last").textContent=lastHeartbeat
+    ? "Last heartbeat: "+new Date(lastHeartbeat).toLocaleTimeString()
+    : "No heartbeat received yet";
+}
+
+async function start(){
+  const email=prompt("Enter Firebase account email");
+  if(!email)return;
+
+  const password=prompt("Enter Firebase account password");
+  if(!password)return;
+
+  try{
+    const credential=await signInWithEmailAndPassword(
+      auth,email,password
+    );
+
+    const uid=credential.user.uid;
+    const heartbeatRef=ref(
+      db,"monitors/"+uid+"/heartbeat"
+    );
+
+    unsubscribe=onValue(heartbeatRef,snapshot=>{
+      const data=snapshot.val();
+
+      if(data && Number.isFinite(Number(data.clientTime))){
+        const timestamp=Number(data.clientTime);
+
+        // Update only for a new heartbeat.
+        if(timestamp>lastHeartbeat){
+          lastHeartbeat=timestamp;
+        }
+      }
+
+      checkStatus();
+    },error=>{
+      showDanger(true,
+        "Firebase connection/read error. Check internet and rules.");
+    });
+
+    setInterval(checkStatus,1000);
+
+  }catch(error){
+    $("state").textContent="LOGIN ERROR";
+    $("message").textContent=error.message;
+  }
+}
+
+$("sound").addEventListener("click",async()=>{
+  try{
+    audio=audio||new(window.AudioContext||
+      window.webkitAudioContext)();
+    await audio.resume();
+    alarmEnabled=true;
+    silenced=false;
+    soundOn();
+    $("message").textContent=danger
+      ?"DANGER active — alarm enabled."
+      :"Alarm enabled. Monitoring active.";
+  }catch(e){
+    $("message").textContent="Could not enable sound.";
+  }
+});
+
+$("notify").addEventListener("click",async()=>{
+  if(!("Notification" in window)){
+    $("message").textContent=
+      "Notifications are not supported in this browser.";
+    return;
+  }
+
+  const result=await Notification.requestPermission();
+  $("message").textContent=result==="granted"
+    ?"Notifications enabled."
+    :"Notification permission not granted.";
+});
+
+$("silence").addEventListener("click",()=>{
+  silenced=true;
+  soundOff();
+  $("message").textContent=
+    "Alarm silenced. Visual alert remains active.";
+});
+
+start();
+</script>
+</body>
+</html>
