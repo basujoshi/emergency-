@@ -1,44 +1,44 @@
-
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BD DANGER ALERT</title>
+<title>BD Danger Alert</title>
 <style>
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:#080d18;color:white;font:16px Arial}
-main{width:min(100%,500px);padding:25px 20px;background:#172033;border-radius:20px;text-align:center}
-.light{width:45px;height:45px;margin:25px auto;border-radius:50%;background:#64748b}
-.danger{background:#ef2222;box-shadow:0 0 20px #f22,0 0 55px #f22;animation:blink .6s infinite alternate}
-@keyframes blink{from{opacity:.2}to{opacity:1}}
-button{border:0;border-radius:9px;padding:12px;margin:5px;background:#2563eb;color:white;cursor:pointer}
-.secondary{background:#475569}
-.good{color:#86efac}.bad{color:#f87171}
-p{line-height:1.5;color:#cbd5e1;overflow-wrap:anywhere}
+body{margin:0;min-height:100vh;background:#08111d;color:white;
+font-family:Arial,sans-serif;display:grid;place-items:center;padding:18px}
+.card{width:100%;max-width:460px;text-align:center;background:#142238;
+padding:24px;border-radius:20px}
+input,button{width:100%;padding:14px;margin:8px 0;border-radius:10px;
+font-size:16px}
+input{background:#07111f;color:white;border:1px solid #47617e}
+button{border:0;background:#00c781;color:#062316;font-weight:bold}
+#enable{background:#367dff;color:white}
+#screen{margin-top:18px;padding:25px 10px;border-radius:14px;background:#0b5139}
+#screen.danger{background:#a40012;animation:blink .7s infinite}
+#screen h1{font-size:clamp(32px,10vw,52px);margin:8px 0}
+#status{overflow-wrap:anywhere}
+@keyframes blink{50%{background:#ff1028}}
 </style>
 </head>
 <body>
-<main>
-<h1>BD <span style="color:#f87171">DANGER ALERT</span></h1>
-<div id="light" class="light"></div>
-<h2 id="state">CONNECTING...</h2>
-<p id="message">Connecting to Firebase...</p>
-<p id="last">Waiting for heartbeat...</p>
-<button id="sound">Enable Alarm Sound</button>
-<button id="notify" class="secondary">Enable Notifications</button>
-<button id="silence" class="secondary">Silence Alarm</button>
-<p id="msg"></p>
-</main>
+<div class="card">
+<h2>BD DANGER ALERT</h2>
+<input id="room" placeholder="Enter the same Room ID">
+<button id="connect">CONNECT ALERT</button>
+<button id="enable">ENABLE SOUND</button>
+<div id="screen">
+<h1 id="heading">STANDBY</h1>
+<p id="status">Enter Room ID and connect.</p>
+</div>
+</div>
 
 <script type="module">
-import {initializeApp}
-from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-
-import {getAuth,signInAnonymously}
-from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-
-import {getDatabase,ref,onValue}
+import { initializeApp } from
+"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, onValue }
 from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const firebaseConfig = {
@@ -52,165 +52,141 @@ const firebaseConfig = {
   measurementId: "G-RQ00W2EW9Q"
 };
 
-const app=initializeApp(firebaseConfig);
-const auth=getAuth(app);
-const db=getDatabase(app);
-const $=id=>document.getElementById(id);
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const $ = id => document.getElementById(id);
 
-const roomId=new URLSearchParams(location.search).get("room");
-const TIMEOUT=10000;
+let room = null;
+let unsubscribe = [];
+let audioContext = null;
+let alarmTimer = null;
+let alarmEnabled = false;
+let wasDanger = false;
 
-let lastBeat=0,danger=null;
-let soundEnabled=false,silenced=false;
-let audio=null,oscillator=null,gain=null;
+function showDanger(danger, message) {
+  $("screen").classList.toggle("danger", danger);
+  $("heading").textContent = danger ? "⚠ DANGER ⚠" : "MONITOR ONLINE";
+  $("status").textContent = message;
 
-function stopSound(){
-  if(oscillator){
-    try{oscillator.stop()}catch(e){}
-    oscillator.disconnect();
-    oscillator=null;
+  if (danger && !wasDanger && alarmEnabled) startAlarm();
+  if (!danger) stopAlarm();
+
+  if (danger && !wasDanger && "Notification" in window &&
+      Notification.permission === "granted") {
+    try {
+      new Notification("BD DANGER ALERT", {
+        body: "The monitor heartbeat has stopped."
+      });
+    } catch {}
   }
-  if(gain){
-    gain.disconnect();
-    gain=null;
+
+  wasDanger = danger;
+}
+
+function startAlarm() {
+  stopAlarm();
+
+  try {
+    audioContext = audioContext || new AudioContext();
+
+    const beep = () => {
+      if (!audioContext || audioContext.state === "closed") return;
+
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = "square";
+      oscillator.frequency.value = 880;
+      gain.gain.value = 0.15;
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.25);
+    };
+
+    beep();
+    alarmTimer = setInterval(beep, 700);
+  } catch (error) {
+    $("status").textContent += " (Sound blocked by browser)";
   }
 }
 
-function startSound(){
-  if(!soundEnabled||silenced||!danger||oscillator)return;
-  try{
-    audio=audio||new(window.AudioContext||
-      window.webkitAudioContext)();
-    audio.resume();
-
-    oscillator=audio.createOscillator();
-    gain=audio.createGain();
-    oscillator.type="square";
-    oscillator.frequency.value=880;
-    gain.gain.value=.07;
-    oscillator.connect(gain);
-    gain.connect(audio.destination);
-    oscillator.start();
-
-    let pulse=true;
-    const timer=setInterval(()=>{
-      if(!oscillator){clearInterval(timer);return;}
-      pulse=!pulse;
-      if(gain){
-        gain.gain.setTargetAtTime(
-          pulse ? .07 : .001,audio.currentTime,.02
-        );
-      }
-    },350);
-  }catch(e){
-    $("msg").textContent="Sound blocked. Tap Enable Alarm Sound.";
-  }
+function stopAlarm() {
+  if (alarmTimer) clearInterval(alarmTimer);
+  alarmTimer = null;
 }
 
-function showDanger(bad,text){
-  if(danger===bad)return;
-  danger=bad;
-  $("light").className=bad?"light danger":"light";
-  $("state").textContent=bad?"DANGER!":"SYSTEM NORMAL";
-  $("state").className=bad?"bad":"good";
-  $("message").textContent=text;
+$("enable").onclick = async () => {
+  try {
+    audioContext = audioContext || new AudioContext();
+    await audioContext.resume();
+    alarmEnabled = true;
 
-  if(bad){
-    silenced=false;
-    startSound();
-    if("Notification" in window &&
-       Notification.permission==="granted"){
-      try{
-        new Notification("BD DANGER ALERT",{
-          body:text,tag:"bd-danger"
-        });
-      }catch(e){}
+    if ("Notification" in window &&
+        Notification.permission === "default") {
+      await Notification.requestPermission();
     }
-  }else{
-    stopSound();
-    silenced=false;
-  }
-}
 
-function checkStatus(){
-  const age=Date.now()-lastBeat;
-  if(!lastBeat){
-    showDanger(true,
-      "No heartbeat. Check monitor.html and the alert link.");
-  }else if(age>TIMEOUT){
-    showDanger(true,
-      "DANGER! Monitor is offline or signal lost.");
-  }else{
-    showDanger(false,"Monitor is online.");
+    $("enable").textContent = "SOUND ENABLED";
+  } catch {
+    $("status").textContent =
+      "Sound unavailable. Check browser permissions.";
   }
-  $("last").textContent=lastBeat
-    ?"Last heartbeat: "+new Date(lastBeat).toLocaleTimeString()
-    :"No heartbeat received yet";
-}
+};
 
-async function main(){
-  if(!roomId){
-    showDanger(true,
-      "Missing room code. Open the alert link from monitor.html.");
+$("connect").onclick = () => {
+  const value = $("room").value.trim();
+
+  if (!/^[A-Za-z0-9_-]{3,60}$/.test(value)) {
+    $("status").textContent = "Enter a valid Room ID.";
     return;
   }
 
-  try{
-    await signInAnonymously(auth);
+  unsubscribe.forEach(fn => fn());
+  unsubscribe = [];
+  room = value;
+  wasDanger = false;
+  showDanger(true, "Waiting for monitor heartbeat...");
 
-    onValue(ref(db,"rooms/"+roomId+"/heartbeat"),snapshot=>{
-      const data=snapshot.val();
-      if(data&&Number.isFinite(Number(data.clientTime))){
-        const timestamp=Number(data.clientTime);
-        if(timestamp>lastBeat)lastBeat=timestamp;
-      }
-      checkStatus();
-    },error=>{
-      showDanger(true,
-        "Firebase read failed. Check rules and internet.");
-      $("msg").textContent=error.message;
-    });
+  const heartbeatRef = ref(db, `bdDangerRooms/${room}/heartbeat`);
+  const activeRef = ref(db, `bdDangerRooms/${room}/active`);
 
-    setInterval(checkStatus,1000);
-  }catch(e){
-    showDanger(true,
-      "Firebase connection failed. Check Anonymous Auth and rules.");
-    $("msg").textContent=e.message;
+  let heartbeat = 0;
+  let active = false;
+  let received = false;
+
+  function evaluate() {
+    const online = active && heartbeat > 0 &&
+      Date.now() - heartbeat < 10000;
+
+    if (online) {
+      showDanger(false, "Heartbeat received • " +
+        new Date(heartbeat).toLocaleTimeString());
+    } else {
+      showDanger(true, received
+        ? "Monitor is offline or heartbeat timed out."
+        : "Waiting for first heartbeat...");
+    }
   }
-}
 
-$("sound").onclick=async()=>{
-  try{
-    audio=audio||new(window.AudioContext||
-      window.webkitAudioContext)();
-    await audio.resume();
-    soundEnabled=true;
-    silenced=false;
-    startSound();
-    $("msg").textContent="Alarm sound enabled.";
-  }catch(e){
-    $("msg").textContent="Unable to enable sound.";
-  }
+  unsubscribe.push(onValue(heartbeatRef, snapshot => {
+    heartbeat = snapshot.val() || 0;
+    received = received || heartbeat > 0;
+    evaluate();
+  }, error => {
+    showDanger(true, "Database error: " + error.message);
+  }));
+
+  unsubscribe.push(onValue(activeRef, snapshot => {
+    active = snapshot.val() === true;
+    evaluate();
+  }, error => {
+    showDanger(true, "Database error: " + error.message);
+  }));
+
+  const watchdog = setInterval(evaluate, 2000);
+  unsubscribe.push(() => clearInterval(watchdog));
 };
-
-$("notify").onclick=async()=>{
-  if(!("Notification" in window)){
-    $("msg").textContent="Notifications unsupported by this browser.";
-    return;
-  }
-  const result=await Notification.requestPermission();
-  $("msg").textContent=result==="granted"
-    ?"Notification permission granted."
-    :"Notification permission not granted.";
-};
-
-$("silence").onclick=()=>{
-  silenced=true;
-  stopSound();
-  $("msg").textContent="Sound silenced; red visual alert remains.";
-};
-
-main();
 </script>
 </body>
 </html>
+```
