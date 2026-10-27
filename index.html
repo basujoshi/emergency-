@@ -4,120 +4,70 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BD Danger — Alert Viewer</title>
+<title>BD Alert Viewer</title>
 <style>
-*{box-sizing:border-box}body{background:#0b1020;color:white;font-family:Arial;padding:20px}
-main{max-width:520px;margin:20px auto;background:#151d32;padding:24px;border-radius:18px}
-h1{color:#ff5555}input,button{width:100%;padding:14px;margin:7px 0;border-radius:9px;font-size:16px}
-input{background:#0b1020;color:white;border:1px solid #475569}button{border:0;background:#2563eb;color:white;font-weight:bold}
-.card{background:#0b1020;border-radius:10px;padding:14px;margin-top:12px;overflow-wrap:anywhere}
-a{color:#93c5fd}.danger{color:#ff5353;font-size:23px;font-weight:bold}
+body{background:#080e19;color:white;font-family:Arial;padding:16px}
+main{max-width:850px;margin:auto}
+section{background:#121d30;padding:18px;border-radius:14px;margin:12px 0}
+input,button{width:100%;box-sizing:border-box;padding:13px;margin:6px 0;border-radius:9px;font-size:16px}
+input{background:#080e19;color:white;border:1px solid #344760}
+button{background:#2563eb;color:white;border:0;font-weight:bold}
+#details{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.item{background:#080e19;padding:13px;border-radius:10px;overflow-wrap:anywhere}
+.label{color:#94a3b8;font-size:12px}.value{margin-top:6px;white-space:pre-wrap}
+a{color:#93c5fd}
+iframe{width:100%;height:300px;border:0;border-radius:10px}
 </style>
 </head>
 <body>
 <main>
+<section>
 <h1>🚨 BD ALERT VIEWER</h1>
-<input id="room" placeholder="Enter the person's Room ID">
-<button id="connect">CONNECT TO ROOM</button>
-<button id="alarm">ENABLE SOUND & NOTIFICATIONS</button>
-<div class="card" id="status">Status: Not connected</div>
-<div class="card" id="details">Waiting for room data.</div>
-<a id="map" target="_blank" rel="noopener" hidden>Open location in Google Maps</a>
+<input id="room" placeholder="Room ID e.g. BD1001">
+<button id="connect">VIEW LIVE DETAILS</button>
+<p id="status">Not connected</p>
+</section>
+<section>
+<h2 id="headline">Waiting for room</h2>
+<div id="details"></div>
+<h2>📍 GPS Location</h2>
+<p id="coords">Location unavailable</p>
+<a id="map" target="_blank" hidden>Open Google Maps</a>
+<iframe id="frame" title="GPS map" hidden></iframe>
+</section>
 </main>
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-
-const firebaseConfig = {
- apiKey: "AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
- authDomain: "king-59c08.firebaseapp.com",
- databaseURL: "https://king-59c08-default-rtdb.firebaseio.com",
- projectId: "king-59c08",
- storageBucket: "king-59c08.firebasestorage.app",
- messagingSenderId: "982382372976",
- appId: "1:982382372976:web:07758531a29fdd966e6cb5",
- measurementId: "G-RQ00W2EW9Q"
-};
-const db = getDatabase(initializeApp(firebaseConfig));
-const $ = id => document.getElementById(id);
-let unsubscribe = null, audioCtx = null, lastSos = 0, notificationsEnabled = false;
-
-$("alarm").onclick = async () => {
- try {
-  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-  await audioCtx.resume();
-  if ("Notification" in window) {
-   const permission = await Notification.requestPermission();
-   notificationsEnabled = permission === "granted";
-  }
-  $("status").textContent = "Sound enabled. Keep this page open.";
- } catch(e) {
-  $("status").textContent = "Sound setup failed: " + e.message;
- }
-};
-
-function beep() {
- if (!audioCtx) return;
- try {
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.frequency.value = 880;
-  gain.gain.value = 0.15;
-  osc.connect(gain); gain.connect(audioCtx.destination);
-  osc.start(); osc.stop(audioCtx.currentTime + 0.6);
- } catch {}
+import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import{getDatabase,ref,onValue}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+''' + firebaseConfig.replace('const firebaseConfig = ', 'const firebaseConfig=') + '''
+const db=getDatabase(initializeApp(firebaseConfig));
+const $=id=>document.getElementById(id);let off=null;
+function add(k,v){
+ const d=document.createElement("div");d.className="item";
+ const l=document.createElement("div");l.className="label";l.textContent=k;
+ const val=document.createElement("div");val.className="value";val.textContent=v??"Not provided";
+ d.append(l,val);$("details").append(d);
 }
-
-$("connect").onclick = () => {
- const room = $("room").value.trim().replace(/[.#$/\[\]]/g, "_");
- if (!room) { $("status").textContent = "Enter a Room ID first."; return; }
- if (unsubscribe) unsubscribe();
-
- $("status").textContent = "Connecting…";
- unsubscribe = onValue(ref(db, "bdDangerRooms/" + room), snap => {
-  if (!snap.exists()) {
-   $("details").textContent = "No data found for this Room ID yet.";
-   $("status").textContent = "Waiting for the monitor to start.";
-   $("map").hidden = true;
-   return;
-  }
-  const d = snap.val();
-  const loc = d.location;
-  const isDanger = d.emergency === true;
-  $("status").innerHTML = isDanger
-   ? '<div class="danger">🆘 SOS EMERGENCY</div>'
-   : (d.active ? "🟢 Monitor active" : "⚪ Monitor inactive");
-  $("details").innerHTML = "";
-  const rows = [
-   ["Name", d.name || "Not provided"],
-   ["Room ID", room],
-   ["Message", d.message || "No message"],
-   ["Last heartbeat", d.heartbeat ? new Date(d.heartbeat).toLocaleString() : "Unknown"],
-   ["Last update", d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "Unknown"],
-   ["GPS", loc ? `${loc.lat}, ${loc.lng} (accuracy ±${loc.accuracy ?? "?"} m)` : "Not available"]
-  ];
-  rows.forEach(([k,v]) => {
-   const p = document.createElement("p");
-   p.textContent = k + ": " + v;
-   $("details").appendChild(p);
-  });
-  if (loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
-   $("map").href = `https://www.google.com/maps?q=${loc.lat},${loc.lng}`;
-   $("map").hidden = false;
-  } else $("map").hidden = true;
-
-  if (isDanger && d.sosAt && d.sosAt !== lastSos) {
-   lastSos = d.sosAt;
-   beep();
-   if (notificationsEnabled && "Notification" in window) {
-    new Notification("BD DANGER ALERT", {
-     body: (d.name || "Someone") + " has sent an SOS alert."
-    });
-   }
-  }
- }, error => {
-  $("status").textContent = "Firebase error: " + error.message;
- });
+$("connect").onclick=()=>{
+ const room=$("room").value.trim().replace(/[.#$[\\\\]\\/]/g,"_");
+ if(!room){$("status").textContent="Enter Room ID";return}
+ if(off)off();
+ off=onValue(ref(db,"bdDangerRooms/"+room),snap=>{
+  if(!snap.exists()){$("headline").textContent="Room not found";$("details").replaceChildren();$("status").textContent="No data found";return}
+  const d=snap.val(),loc=d.location;
+  $("headline").textContent=d.emergency?"🆘 SOS EMERGENCY":d.active?"🟢 MONITOR ACTIVE":"⚠️ INACTIVE";
+  $("details").replaceChildren();
+  add("Name",d.name);add("Room ID",d.room||room);add("Phone",d.phone);add("Emergency contact",d.emergencyContact);
+  add("Message",d.message);add("SOS time",d.sosAt?new Date(d.sosAt).toLocaleString():"No SOS recorded");
+  add("Last heartbeat",d.heartbeat?new Date(d.heartbeat).toLocaleString():"Unknown");
+  add("Last update",d.updatedAt?new Date(d.updatedAt).toLocaleString():"Unknown");
+  if(loc&&Number.isFinite(Number(loc.lat))&&Number.isFinite(Number(loc.lng))){
+   $("coords").textContent=`${loc.lat}, ${loc.lng} • accuracy ±${loc.accuracy??"?"} m`;
+   $("map").href=`https://www.google.com/maps?q=${loc.lat},${loc.lng}`;$("map").hidden=false;
+   $("frame").src=`https://maps.google.com/maps?q=${loc.lat},${loc.lng}&z=15&output=embed`;$("frame").hidden=false;
+  }else{$("coords").textContent="No GPS location received";$("map").hidden=true;$("frame").hidden=true}
+  $("status").textContent="Live update: "+new Date().toLocaleTimeString();
+ },e=>$("status").textContent="Firebase error: "+e.message);
 };
 </script>
 </body>
