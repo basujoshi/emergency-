@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "bdDangerRooms": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
