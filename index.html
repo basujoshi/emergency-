@@ -1,166 +1,123 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BD Emergency Alert</title>
+<title>BD Danger — Alert Viewer</title>
 <style>
-*{box-sizing:border-box}body{margin:0;padding:18px;background:#08111f;color:white;
-font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}
-.card{width:100%;max-width:480px;background:#142238;padding:22px;border-radius:18px;text-align:center}
-input,button,a{display:block;width:100%;padding:14px;margin:9px 0;border-radius:10px;
-font:inherit;text-decoration:none}
-input{background:#08111f;color:white;border:1px solid #52627b}
-button{background:#16c784;color:#062416;border:0;font-weight:bold}
-#sound{background:#367dff;color:white}#map{background:#e6f3ff;color:#0a3a72}
-#screen{padding:20px 12px;border-radius:14px;background:#075b3b;margin-top:15px}
-#screen.danger{background:#b00016;animation:blink .65s infinite}
-#heading{font-size:clamp(28px,8vw,42px)}#message{line-height:1.6;overflow-wrap:anywhere}
-#status,#location{overflow-wrap:anywhere;line-height:1.5}
-@keyframes blink{50%{background:#ff1028}}
+*{box-sizing:border-box}body{background:#0b1020;color:white;font-family:Arial;padding:20px}
+main{max-width:520px;margin:20px auto;background:#151d32;padding:24px;border-radius:18px}
+h1{color:#ff5555}input,button{width:100%;padding:14px;margin:7px 0;border-radius:9px;font-size:16px}
+input{background:#0b1020;color:white;border:1px solid #475569}button{border:0;background:#2563eb;color:white;font-weight:bold}
+.card{background:#0b1020;border-radius:10px;padding:14px;margin-top:12px;overflow-wrap:anywhere}
+a{color:#93c5fd}.danger{color:#ff5353;font-size:23px;font-weight:bold}
 </style>
 </head>
 <body>
-<div class="card">
-<h2>BD EMERGENCY ALERT SYSTEM</h2>
-<input id="room" placeholder="Enter the same Room ID">
-<button id="connect">CONNECT TO MONITOR</button>
-<button id="sound">ENABLE ALARM & NOTIFICATIONS</button>
-
-<div id="screen">
-<h1 id="heading">STANDBY</h1>
-<p id="message">Waiting for monitor status...</p>
-<p id="status">Enter Room ID and connect.</p>
-<p id="location">GPS location: Not received</p>
-<a id="map" href="#" target="_blank" rel="noopener" hidden>OPEN LOCATION IN GOOGLE MAPS</a>
-</div>
-</div>
-
+<main>
+<h1>🚨 BD ALERT VIEWER</h1>
+<input id="room" placeholder="Enter the person's Room ID">
+<button id="connect">CONNECT TO ROOM</button>
+<button id="alarm">ENABLE SOUND & NOTIFICATIONS</button>
+<div class="card" id="status">Status: Not connected</div>
+<div class="card" id="details">Waiting for room data.</div>
+<a id="map" target="_blank" rel="noopener" hidden>Open location in Google Maps</a>
+</main>
 <script type="module">
-import {initializeApp} from
-"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getDatabase,ref,onValue} from
-"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-const firebaseConfig={
- apiKey:"AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
- authDomain:"king-59c08.firebaseapp.com",
- databaseURL:"https://king-59c08-default-rtdb.firebaseio.com",
- projectId:"king-59c08",
- storageBucket:"king-59c08.firebasestorage.app",
- messagingSenderId:"982382372976",
- appId:"1:982382372976:web:07758531a29fdd966e6cb5",
- measurementId:"G-RQ00W2EW9Q"
+const firebaseConfig = {
+ apiKey: "AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
+ authDomain: "king-59c08.firebaseapp.com",
+ databaseURL: "https://king-59c08-default-rtdb.firebaseio.com",
+ projectId: "king-59c08",
+ storageBucket: "king-59c08.firebasestorage.app",
+ messagingSenderId: "982382372976",
+ appId: "1:982382372976:web:07758531a29fdd966e6cb5",
+ measurementId: "G-RQ00W2EW9Q"
 };
-const db=getDatabase(initializeApp(firebaseConfig));
-const $=id=>document.getElementById(id);
-let heartbeat=0,active=false,emergency=false,message="",locationData=null;
-let soundEnabled=false,audioCtx=null,alarmTimer=null,wasDanger=false;
-let lastSosAt=0,unsubs=[],watchdog=null,connected=false;
+const db = getDatabase(initializeApp(firebaseConfig));
+const $ = id => document.getElementById(id);
+let unsubscribe = null, audioCtx = null, lastSos = 0, notificationsEnabled = false;
 
-function startAlarm(){
- if(!soundEnabled||alarmTimer)return;
- try{
-  audioCtx=audioCtx||new AudioContext();
-  const beep=()=>{
-   if(!audioCtx||audioCtx.state==="closed")return;
-   const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();
-   osc.type="square";osc.frequency.value=950;gain.gain.value=.18;
-   osc.connect(gain);gain.connect(audioCtx.destination);
-   osc.start();osc.stop(audioCtx.currentTime+.35);
-  };
-  beep();alarmTimer=setInterval(beep,750);
- }catch(e){}
-}
-function stopAlarm(){
- if(alarmTimer)clearInterval(alarmTimer);
- alarmTimer=null;
-}
-function render(){
- if(!connected)return;
- const stale=!heartbeat||Date.now()-heartbeat>10000;
- const danger=emergency||!active||stale;
-
- $("screen").classList.toggle("danger",danger);
- $("heading").textContent=emergency?"🚨 SOS EMERGENCY 🚨":
-  danger?"⚠ MONITOR OFFLINE ⚠":"MONITOR ONLINE";
-
- $("message").textContent=emergency?
-  (message||"SOS! I AM IN TROUBLE AND NEED IMMEDIATE HELP. PLEASE CONTACT ME NOW."):
-  danger?
-  "The monitor has stopped sending heartbeat. Please check on this person immediately.":
-  "Monitor is active. No SOS has been reported.";
-
- $("status").textContent=emergency?
-  "EMERGENCY SOS RECEIVED • "+(lastSosAt?new Date(lastSosAt).toLocaleString():""):
-  stale?"Heartbeat missing or outdated. Monitor may be offline.":
-  "Last heartbeat: "+new Date(heartbeat).toLocaleTimeString();
-
- if(locationData&&Number.isFinite(Number(locationData.latitude))&&
-    Number.isFinite(Number(locationData.longitude))){
-  const lat=Number(locationData.latitude),lon=Number(locationData.longitude);
-  $("location").textContent="Coordinates: "+lat.toFixed(6)+", "+lon.toFixed(6)+
-   (locationData.accuracy?" • Reported accuracy ±"+Math.round(locationData.accuracy)+" m":"");
-  $("map").href="https://maps.google.com/?q="+lat+","+lon;
-  $("map").hidden=false;
- }else{
-  $("location").textContent="GPS location not received yet.";
-  $("map").hidden=true;
- }
-
- if(danger&&!wasDanger){
-  if(soundEnabled)startAlarm();
-  if(soundEnabled&&"Notification" in window&&Notification.permission==="granted"){
-   try{new Notification(emergency?"SOS EMERGENCY":"MONITOR OFFLINE",{
-    body:message||"Please check the alert page immediately."
-   })}catch(e){}
-  }
- }
- if(!danger)stopAlarm();
- wasDanger=danger;
-}
-
-$("sound").onclick=async()=>{
- try{
-  audioCtx=audioCtx||new AudioContext();
+$("alarm").onclick = async () => {
+ try {
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
   await audioCtx.resume();
-  soundEnabled=true;
-  if("Notification" in window&&Notification.permission==="default"){
-   await Notification.requestPermission();
+  if ("Notification" in window) {
+   const permission = await Notification.requestPermission();
+   notificationsEnabled = permission === "granted";
   }
-  $("sound").textContent="ALARM ENABLED";
-  if(emergency||!active||!heartbeat||Date.now()-heartbeat>10000)startAlarm();
- }catch(e){
-  $("status").textContent="Sound blocked. Check browser permissions.";
+  $("status").textContent = "Sound enabled. Keep this page open.";
+ } catch(e) {
+  $("status").textContent = "Sound setup failed: " + e.message;
  }
 };
 
-$("connect").onclick=()=>{
- const room=$("room").value.trim();
- if(!/^[A-Za-z0-9_-]{5,80}$/.test(room)){
-  $("status").textContent="Enter a valid Room ID.";
-  return;
- }
- unsubs.forEach(fn=>fn());
- unsubs=[];if(watchdog)clearInterval(watchdog);
- heartbeat=0;active=false;emergency=false;message="";
- locationData=null;lastSosAt=0;wasDanger=false;connected=true;
+function beep() {
+ if (!audioCtx) return;
+ try {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = 880;
+  gain.gain.value = 0.15;
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.6);
+ } catch {}
+}
 
- const base="bdDangerRooms/"+room;
- const listen=(path,callback)=>{
-  unsubs.push(onValue(ref(db,base+"/"+path),s=>{
-   callback(s.val());render();
-  },e=>{$("status").textContent="Firebase error: "+e.message}));
- };
- listen("heartbeat",v=>heartbeat=Number(v)||0);
- listen("active",v=>active=v===true);
- listen("emergency",v=>emergency=v===true);
- listen("message",v=>message=typeof v==="string"?v:"");
- listen("location",v=>locationData=v&&typeof v==="object"?v:null);
- listen("sosAt",v=>lastSosAt=Number(v)||0);
+$("connect").onclick = () => {
+ const room = $("room").value.trim().replace(/[.#$/\[\]]/g, "_");
+ if (!room) { $("status").textContent = "Enter a Room ID first."; return; }
+ if (unsubscribe) unsubscribe();
 
- watchdog=setInterval(render,2000);
- $("status").textContent="Connected. Waiting for monitor data...";
+ $("status").textContent = "Connecting…";
+ unsubscribe = onValue(ref(db, "bdDangerRooms/" + room), snap => {
+  if (!snap.exists()) {
+   $("details").textContent = "No data found for this Room ID yet.";
+   $("status").textContent = "Waiting for the monitor to start.";
+   $("map").hidden = true;
+   return;
+  }
+  const d = snap.val();
+  const loc = d.location;
+  const isDanger = d.emergency === true;
+  $("status").innerHTML = isDanger
+   ? '<div class="danger">🆘 SOS EMERGENCY</div>'
+   : (d.active ? "🟢 Monitor active" : "⚪ Monitor inactive");
+  $("details").innerHTML = "";
+  const rows = [
+   ["Name", d.name || "Not provided"],
+   ["Room ID", room],
+   ["Message", d.message || "No message"],
+   ["Last heartbeat", d.heartbeat ? new Date(d.heartbeat).toLocaleString() : "Unknown"],
+   ["Last update", d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "Unknown"],
+   ["GPS", loc ? `${loc.lat}, ${loc.lng} (accuracy ±${loc.accuracy ?? "?"} m)` : "Not available"]
+  ];
+  rows.forEach(([k,v]) => {
+   const p = document.createElement("p");
+   p.textContent = k + ": " + v;
+   $("details").appendChild(p);
+  });
+  if (loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)) {
+   $("map").href = `https://www.google.com/maps?q=${loc.lat},${loc.lng}`;
+   $("map").hidden = false;
+  } else $("map").hidden = true;
+
+  if (isDanger && d.sosAt && d.sosAt !== lastSos) {
+   lastSos = d.sosAt;
+   beep();
+   if (notificationsEnabled && "Notification" in window) {
+    new Notification("BD DANGER ALERT", {
+     body: (d.name || "Someone") + " has sent an SOS alert."
+    });
+   }
+  }
+ }, error => {
+  $("status").textContent = "Firebase error: " + error.message;
+ });
 };
 </script>
 </body>
