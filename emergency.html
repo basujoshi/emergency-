@@ -1,0 +1,245 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BD Danger Admin Dashboard</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080d18;color:#f4f7ff;font-family:Arial,sans-serif}
+header{padding:22px;background:#121d30;border-bottom:1px solid #30405a}
+h1{margin:0;color:#ff475c;font-size:25px}
+header p{color:#aebbd0;margin-bottom:0}
+main{max-width:1000px;margin:auto;padding:16px}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:15px 0}
+button{border:0;border-radius:9px;padding:12px 16px;cursor:pointer;
+font-weight:bold;background:#2878ff;color:white}
+input{flex:1;min-width:190px;padding:12px;border-radius:9px;
+background:#121d30;color:white;border:1px solid #40516d}
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.box,.customer{background:#121d30;border:1px solid #2d3d55;
+border-radius:13px;padding:15px;margin:12px 0;overflow-wrap:anywhere}
+.box strong{display:block;font-size:26px;margin-top:7px}
+.customer.danger{border:2px solid #ff344b;background:#35121d}
+.customer.online{border-left:5px solid #18c78b}
+.customer.unknown{border-left:5px solid #e7a63b}
+.badge{font-size:12px;font-weight:bold;letter-spacing:.5px}
+.danger .badge{color:#ff5b6c}
+.online .badge{color:#18c78b}
+.unknown .badge{color:#ffc55b}
+.message{padding:12px;background:#080d18;border-radius:8px;line-height:1.5}
+a{display:inline-block;margin-top:10px;color:#77baff}
+.small{font-size:12px;color:#aebbd0;line-height:1.5}
+#status{padding:12px;background:#080d18;border-radius:8px;margin-top:12px}
+@media(max-width:500px){.summary{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+<h1>🚨 BD DANGER ADMIN</h1>
+<p>Emergency monitoring • Automatic offline detection</p>
+</header>
+
+<main>
+<div class="toolbar">
+<button id="sound">ENABLE ALARM & NOTIFICATIONS</button>
+<button id="refresh">REFRESH STATUS</button>
+<input id="search" placeholder="Search Room ID or customer name">
+</div>
+
+<div class="summary">
+<div class="box">Total rooms<strong id="total">0</strong></div>
+<div class="box">Online<strong id="online">0</strong></div>
+<div class="box">Alerts<strong id="alerts">0</strong></div>
+</div>
+
+<div id="status">Connecting to Firebase...</div>
+<div id="list"></div>
+
+<p class="small">
+Offline means heartbeat is missing or older than 10 seconds.
+It does not prove that the customer is in danger. Location shown is
+the last location received and may be outdated.
+</p>
+</main>
+
+<script type="module">
+import {initializeApp} from
+"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getDatabase,ref,onValue} from
+"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const firebaseConfig={
+ apiKey:"AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
+ authDomain:"king-59c08.firebaseapp.com",
+ databaseURL:"https://king-59c08-default-rtdb.firebaseio.com",
+ projectId:"king-59c08",
+ storageBucket:"king-59c08.firebasestorage.app",
+ messagingSenderId:"982382372976",
+ appId:"1:982382372976:web:07758531a29fdd966e6cb5",
+ measurementId:"G-RQ00W2EW9Q"
+};
+
+const db=getDatabase(initializeApp(firebaseConfig));
+const $=id=>document.getElementById(id);
+
+let rooms={};
+let soundEnabled=false;
+let audioCtx=null;
+let alarmTimer=null;
+let notified=new Set();
+let latestStates={};
+
+function escapeHTML(s){
+ return String(s??"").replace(/[&<>"']/g,c=>({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+ }[c]));
+}
+
+function playBeep(){
+ if(!soundEnabled||!audioCtx)return;
+ try{
+  const osc=audioCtx.createOscillator();
+  const gain=audioCtx.createGain();
+  osc.type="square";
+  osc.frequency.value=880;
+  gain.gain.value=.15;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime+.3);
+ }catch(e){}
+}
+
+function startAlarm(){
+ if(!soundEnabled||alarmTimer)return;
+ playBeep();
+ alarmTimer=setInterval(playBeep,900);
+}
+function stopAlarm(){
+ if(alarmTimer)clearInterval(alarmTimer);
+ alarmTimer=null;
+}
+
+$("sound").onclick=async()=>{
+ try{
+  audioCtx=audioCtx||new AudioContext();
+  await audioCtx.resume();
+  soundEnabled=true;
+  if("Notification" in window&&Notification.permission==="default"){
+   await Notification.requestPermission();
+  }
+  $("sound").textContent="ALARM ENABLED";
+  if(Object.values(latestStates).some(x=>x.danger))startAlarm();
+ }catch(e){
+  $("status").textContent="Could not enable sound: "+e.message;
+ }
+};
+
+function notifyOnce(key,title,body){
+ if(notified.has(key))return;
+ notified.add(key);
+ if(soundEnabled)startAlarm();
+ if(soundEnabled&&"Notification" in window&&Notification.permission==="granted"){
+  try{new Notification(title,{body})}catch(e){}
+ }
+}
+
+function render(){
+ const now=Date.now();
+ const query=$("search").value.trim().toLowerCase();
+ let total=0,online=0,alerts=0;
+ const html=[];
+ latestStates={};
+
+ for(const [roomId,d] of Object.entries(rooms)){
+  if(!d||typeof d!=="object")continue;
+  total++;
+
+  const heartbeat=Number(d.heartbeat)||0;
+  const isOnline=d.active===true&&heartbeat>0&&now-heartbeat<=10000;
+  const sos=d.emergency===true;
+  const danger=sos||!isOnline;
+  const stateKey=sos?"SOS":isOnline?"ONLINE":"OFFLINE";
+
+  latestStates[roomId]={danger,sos,isOnline};
+
+  if(isOnline)online++;
+  if(danger)alerts++;
+
+  const name=String(d.name||d.customerName||"Not provided");
+  if(query&&!roomId.toLowerCase().includes(query)&&
+     !name.toLowerCase().includes(query))continue;
+
+  if(danger){
+   const reason=sos?"SOS EMERGENCY":!heartbeat?
+    "MONITOR HAS NO HEARTBEAT":"MONITOR OFFLINE / HEARTBEAT LOST";
+   const eventKey=roomId+":"+stateKey+":"+(sos?(d.sosAt||"sos"):"offline");
+   notifyOnce(eventKey,"BD DANGER ALERT: "+roomId,
+    name+" — "+reason+". "+(d.message||"No customer message provided."));
+  }else{
+   // A future new outage can trigger a new notification.
+   notified.delete(roomId+":ONLINE");
+  }
+
+  const loc=d.location;
+  let locationHTML='<p>Location: Not received</p>';
+  if(loc&&Number.isFinite(Number(loc.latitude))&&
+     Number.isFinite(Number(loc.longitude))){
+   const lat=Number(loc.latitude),lon=Number(loc.longitude);
+   const mapURL="https://maps.google.com/?q="+lat+","+lon;
+   const age=loc.timestamp?Math.max(0,Math.floor((now-Number(loc.timestamp))/1000)):null;
+   locationHTML=
+    '<p>GPS: '+lat.toFixed(6)+', '+lon.toFixed(6)+'</p>'+
+    '<p>Accuracy: ±'+Math.round(Number(loc.accuracy)||0)+' m</p>'+
+    '<p>Location age: '+(age===null?"Unknown":age+" seconds")+'</p>'+
+    '<a href="'+mapURL+'" target="_blank" rel="noopener">OPEN LAST LOCATION IN GOOGLE MAPS</a>';
+  }
+
+  const message=escapeHTML(d.message||"No customer message provided.");
+  const updated=d.sosAt||d.updatedAt||heartbeat;
+  const time=updated?new Date(updated).toLocaleString():"Not available";
+  const statusText=sos?"SOS EMERGENCY":isOnline?"ONLINE":"MONITOR OFFLINE";
+
+  html.push(
+   '<section class="customer '+(sos||!isOnline?"danger":"online")+'">'+
+   '<div class="badge">'+statusText+'</div>'+
+   '<h3>Room: '+escapeHTML(roomId)+'</h3>'+
+   '<p>Customer: '+escapeHTML(name)+'</p>'+
+   '<p>Event time: '+escapeHTML(time)+'</p>'+
+   '<div class="message"><strong>Customer Emergency Message</strong><br>'+message+'</div>'+
+   locationHTML+
+   '<p class="small">Last heartbeat: '+
+   escapeHTML(heartbeat?new Date(heartbeat).toLocaleString():"Never received")+
+   '</p></section>'
+  );
+ }
+
+ $("total").textContent=total;
+ $("online").textContent=online;
+ $("alerts").textContent=alerts;
+ $("list").innerHTML=html.length?html.join(""):"<p>No matching rooms found.</p>";
+
+ const activeDanger=Object.values(latestStates).some(x=>x.danger);
+ if(!activeDanger)stopAlarm();
+}
+
+$("search").addEventListener("input",render);
+$("refresh").onclick=render;
+
+onValue(ref(db,"bdDangerRooms"),snapshot=>{
+ rooms=snapshot.val()||{};
+ $("status").textContent="Database connected • Last checked: "+
+  new Date().toLocaleTimeString();
+ render();
+},error=>{
+ $("status").textContent="Firebase error: "+error.message+
+  ". Check database rules and internet connection.";
+});
+
+setInterval(render,2000);
+</script>
+</body>
+</html>
+```
