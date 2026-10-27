@@ -1,169 +1,156 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BD Danger Monitor</title>
+<title>BD Danger Alert — Monitor</title>
 <style>
-*{box-sizing:border-box}body{margin:0;padding:18px;background:#08111f;color:#fff;
-font-family:Arial,sans-serif;display:grid;place-items:center;min-height:100vh}
-.card{width:100%;max-width:480px;background:#142238;padding:22px;border-radius:18px}
-h1{color:#ff5364}p{line-height:1.5;color:#d6dfed}
-input,textarea,button{width:100%;padding:14px;margin:7px 0;border-radius:10px;font:inherit}
-input,textarea{background:#08111f;color:white;border:1px solid #52627b}
-textarea{min-height:95px}button{border:0;font-weight:bold;cursor:pointer}
-#start{background:#16c784;color:#062416}#sos{background:#ff1838;color:white}
-#stop{background:#46556b;color:white}#status{padding:13px;background:#08111f;border-radius:10px;overflow-wrap:anywhere}
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#0b1020;color:#fff;padding:20px}
+main{max-width:520px;margin:20px auto;background:#151d32;padding:24px;border-radius:20px}
+h1{color:#ff5151;text-align:center}p{color:#cbd5e1;line-height:1.5}
+input,textarea,button{width:100%;padding:14px;margin:7px 0;border-radius:10px;border:1px solid #334155;font-size:16px}
+input,textarea{background:#0b1020;color:white}button{border:0;font-weight:bold;cursor:pointer;background:#2563eb;color:white}
+.sos{background:#e11d48;font-size:22px;padding:22px}.stop{background:#475569}.status{padding:12px;background:#0b1020;border-radius:10px;overflow-wrap:anywhere}
+a{color:#93c5fd}
 </style>
 </head>
 <body>
-<div class="card">
-<h1>BD DANGER MONITOR</h1>
-<p>Keep this page open. Allow location access for GPS updates.</p>
-<label>Room ID (use the same ID on Alert page)</label>
-<input id="room" placeholder="Example: BD-HELP-8X29K7">
-<label>Emergency message</label>
-<textarea id="message">SOS! I AM IN TROUBLE AND NEED IMMEDIATE HELP. PLEASE CHECK MY LOCATION AND CONTACT ME NOW.</textarea>
+<main>
+<h1>🆘 BD DANGER ALERT</h1>
+<p>अपना नाम और एक याद रहने वाला Room ID भरें। जिन लोगों को आपकी alert देखनी है, उन्हें वही Room ID दें।</p>
+
+<input id="person" placeholder="Your name">
+<input id="room" placeholder="Room ID (e.g. BD1001)">
+<textarea id="message" rows="3">SOS! I AM IN TROUBLE. PLEASE CONTACT ME AND CHECK MY LOCATION.</textarea>
+
 <button id="start">START MONITOR + GPS</button>
-<button id="sos">SEND SOS NOW</button>
-<button id="stop">STOP MONITOR</button>
-<div id="status">Status: Not started</div>
-<p id="coords">Location: Not available</p>
-</div>
+<button id="sos" class="sos">🆘 SEND SOS ALERT</button>
+<button id="stop" class="stop">STOP MONITOR</button>
+
+<div class="status" id="status">Status: Not started</div>
+<p id="location">Location: Not available</p>
+<p><a id="map" target="_blank" rel="noopener" hidden>Open my location in Google Maps</a></p>
+</main>
 
 <script type="module">
-import {initializeApp} from
-"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getDatabase,ref,set,update} from
-"https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+ getDatabase, ref, set, update, onDisconnect
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-const firebaseConfig={
- apiKey:"AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
- authDomain:"king-59c08.firebaseapp.com",
- databaseURL:"https://king-59c08-default-rtdb.firebaseio.com",
- projectId:"king-59c08",
- storageBucket:"king-59c08.firebasestorage.app",
- messagingSenderId:"982382372976",
- appId:"1:982382372976:web:07758531a29fdd966e6cb5",
- measurementId:"G-RQ00W2EW9Q"
+const firebaseConfig = {
+ apiKey: "AIzaSyBrVJ_vcLjxZMSZOjqUQocWjVf36GQ1bEw",
+ authDomain: "king-59c08.firebaseapp.com",
+ databaseURL: "https://king-59c08-default-rtdb.firebaseio.com",
+ projectId: "king-59c08",
+ storageBucket: "king-59c08.firebasestorage.app",
+ messagingSenderId: "982382372976",
+ appId: "1:982382372976:web:07758531a29fdd966e6cb5",
+ measurementId: "G-RQ00W2EW9Q"
 };
-const db=getDatabase(initializeApp(firebaseConfig));
-const $=id=>document.getElementById(id);
-let room="",watchId=null,beatTimer=null,locationTimer=null,started=false;
-let latestLocation=null;
 
-function roomValid(s){return /^[A-Za-z0-9_-]{5,80}$/.test(s)}
-function base(){return "bdDangerRooms/"+room}
-function showError(e){$("status").textContent="Error: "+(e.message||e)}
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const $ = id => document.getElementById(id);
+let roomPath = null, watchId = null, heartbeatTimer = null, running = false;
+let lastPosition = null;
 
-async function publishLocation(position){
- latestLocation={
-  latitude:position.coords.latitude,
-  longitude:position.coords.longitude,
-  accuracy:position.coords.accuracy,
-  timestamp:Date.now(),
-  mapsUrl:"https://maps.google.com/?q="+position.coords.latitude+","+position.coords.longitude
- };
- $("coords").textContent=
-  "GPS: "+latestLocation.latitude.toFixed(6)+", "+
-  latestLocation.longitude.toFixed(6)+
-  " • Accuracy ±"+Math.round(latestLocation.accuracy)+" m";
+function getRoom() {
+ const room = $("room").value.trim().replace(/[.#$/\[\]]/g, "_");
+ if (!room) throw new Error("Please enter a Room ID.");
+ return room;
+}
+function showStatus(text) { $("status").textContent = "Status: " + text; }
+function roomRef() { return ref(db, "bdDangerRooms/" + roomPath); }
 
- if(room){
-  try{await set(ref(db,base()+"/location"),latestLocation)}
-  catch(e){showError(e)}
+async function startMonitor() {
+ try {
+  if (running) return;
+  roomPath = getRoom();
+  const name = $("person").value.trim() || "Anonymous";
+  const base = roomRef();
+  running = true;
+  showStatus("Connecting to Firebase…");
+
+  await set(base, {
+   name, room: roomPath, message: $("message").value.trim(),
+   active: true, emergency: false, heartbeat: Date.now(),
+   updatedAt: Date.now(), location: null
+  });
+
+  await onDisconnect(ref(db, "bdDangerRooms/" + roomPath + "/active"))
+   .set(false);
+
+  heartbeatTimer = setInterval(() => {
+   if (running && roomPath) {
+    update(roomRef(), { heartbeat: Date.now(), updatedAt: Date.now() })
+     .catch(e => showStatus("Firebase error: " + e.message));
+   }
+  }, 3000);
+
+  if ("geolocation" in navigator) {
+   watchId = navigator.geolocation.watchPosition(async pos => {
+    lastPosition = {
+     lat: pos.coords.latitude,
+     lng: pos.coords.longitude,
+     accuracy: Math.round(pos.coords.accuracy),
+     time: Date.now()
+    };
+    $("location").textContent =
+     `GPS: ${lastPosition.lat.toFixed(6)}, ${lastPosition.lng.toFixed(6)} (±${lastPosition.accuracy} m)`;
+    $("map").href = `https://www.google.com/maps?q=${lastPosition.lat},${lastPosition.lng}`;
+    $("map").hidden = false;
+    try { await update(roomRef(), { location: lastPosition, updatedAt: Date.now() }); }
+    catch(e) { showStatus("Location update failed: " + e.message); }
+   }, err => {
+    $("location").textContent = "GPS unavailable: " + err.message;
+   }, { enableHighAccuracy:true, maximumAge:5000, timeout:15000 });
+  } else {
+   $("location").textContent = "This browser does not support GPS.";
+  }
+  showStatus("Monitoring started — keep this page open.");
+ } catch(e) {
+  running = false;
+  showStatus(e.message);
  }
 }
 
-async function sendHeartbeat(){
- if(!started||!room)return;
- try{
-  await update(ref(db,base()),{
-   heartbeat:Date.now(),
-   active:true
+async function sendSOS() {
+ try {
+  if (!running) await startMonitor();
+  if (!running) return;
+  await update(roomRef(), {
+   name: $("person").value.trim() || "Anonymous",
+   message: $("message").value.trim() || "SOS — I NEED HELP",
+   emergency: true, sosAt: Date.now(), heartbeat: Date.now(),
+   updatedAt: Date.now(),
+   ...(lastPosition ? { location: lastPosition } : {})
   });
-  $("status").textContent="MONITOR ONLINE • "+new Date().toLocaleTimeString();
- }catch(e){showError(e)}
+  showStatus("SOS sent to this Room ID. Contact emergency services too.");
+ } catch(e) { showStatus("SOS failed: " + e.message); }
 }
 
-$("start").onclick=async()=>{
- room=$("room").value.trim();
- if(!roomValid(room)){
-  $("status").textContent="Use a Room ID with 5–80 letters, numbers, _ or -.";
-  return;
+async function stopMonitor() {
+ running = false;
+ if (heartbeatTimer) clearInterval(heartbeatTimer);
+ heartbeatTimer = null;
+ if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+ watchId = null;
+ if (roomPath) {
+  try { await update(roomRef(), { active:false, updatedAt:Date.now() }); }
+  catch(e) { showStatus("Could not update Firebase: " + e.message); return; }
  }
- if(!("geolocation" in navigator)){
-  $("status").textContent="This browser does not support GPS location.";
-  return;
- }
- started=true;
- try{
-  await update(ref(db,base()),{
-   active:true,
-   emergency:false,
-   message:$("message").value.trim(),
-   heartbeat:Date.now(),
-   updatedAt:Date.now()
-  });
+ showStatus("Monitoring stopped.");
+}
 
-  navigator.geolocation.getCurrentPosition(
-   publishLocation,
-   e=>{$("coords").textContent="GPS unavailable: "+e.message},
-   {enableHighAccuracy:true,timeout:20000,maximumAge:0}
-  );
-
-  watchId=navigator.geolocation.watchPosition(
-   publishLocation,
-   e=>{$("coords").textContent="GPS update unavailable: "+e.message},
-   {enableHighAccuracy:true,maximumAge:3000,timeout:20000}
-  );
-
-  if(beatTimer)clearInterval(beatTimer);
-  beatTimer=setInterval(sendHeartbeat,2000);
-  await sendHeartbeat();
- }catch(e){started=false;showError(e)}
-};
-
-$("sos").onclick=async()=>{
- if(!room){
-  room=$("room").value.trim();
-  if(!roomValid(room)){
-   $("status").textContent="Enter a valid Room ID first.";
-   return;
-  }
- }
- try{
-  await set(ref(db,base()+"/emergency"),true);
-  await update(ref(db,base()),{
-   active:true,
-   emergency:true,
-   message:$("message").value.trim()||
-    "SOS! I AM IN TROUBLE AND NEED IMMEDIATE HELP.",
-   sosAt:Date.now(),
-   heartbeat:Date.now()
-  });
-  $("status").textContent="SOS SENT • Alert page should show the emergency.";
-  if(!latestLocation && navigator.geolocation){
-   navigator.geolocation.getCurrentPosition(publishLocation,
-    e=>{$("coords").textContent="SOS sent; GPS unavailable: "+e.message},
-    {enableHighAccuracy:true,timeout:20000,maximumAge:0});
-  }
- }catch(e){showError(e)}
-};
-
-$("stop").onclick=async()=>{
- started=false;
- if(beatTimer)clearInterval(beatTimer);
- if(locationTimer)clearInterval(locationTimer);
- if(watchId!==null)navigator.geolocation.clearWatch(watchId);
- beatTimer=null;watchId=null;
- if(room){
-  try{
-   await update(ref(db,base()),{active:false,heartbeat:Date.now()});
-   $("status").textContent="MONITOR STOPPED";
-  }catch(e){showError(e)}
- }
-};
+$("start").addEventListener("click", startMonitor);
+$("sos").addEventListener("click", sendSOS);
+$("stop").addEventListener("click", stopMonitor);
+window.addEventListener("beforeunload", () => {
+ if (heartbeatTimer) clearInterval(heartbeatTimer);
+ if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+});
 </script>
 </body>
 </html>
